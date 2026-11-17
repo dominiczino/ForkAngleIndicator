@@ -20,8 +20,13 @@ Hardware on hand: 2× WitMotion SINAT dual-axis inclinometer (IP68, accel + gyro
 | R6 | Survives tractor electrical (12 V nominal, 14.4 V charging, cranking dip, load dump) | — |
 | R7 | Survives vibration, wash-down, impacts on the loader | sensor IP68, cable/connector IP67 |
 | R8 | Wireless reference range | ≥50 m line of sight |
-| R9 | Works with attachment swaps (forks ↔ bucket) | per-attachment zero offsets |
+| R9 | Forks only (no bucket mode) | single stored fork zero offset |
 | R10 | Boot to reading | <3 s from key-on |
+| R11 | Reference unit battery-powered; **forced hard-off while in its tractor holster** (and charges there) | 0 µA drain from logic when docked |
+| R12 | Reference unit auto-off if left on out of the holster | configurable, default 30 min idle |
+
+Decided: SSQA (skid-steer quick-attach) loader, forks only, 12 V hard-wired, reference on battery.
+Pending: confirm SINAT label reads RS485.
 
 ---
 
@@ -44,23 +49,23 @@ From retailer listings (manufacturer page unreachable from where this plan was w
 
 ```
  FORK SENSOR (SINAT #1)                     DASH UNIT (cab)                    REFERENCE UNIT (portable)
- on loader quick-attach plate               ESP32-S3 + display                 SINAT #2 + ESP32 + battery
+ on loader SSQA plate                       ESP32-S3 + display                 SINAT #2 + ESP32 + battery
  ┌─────────────┐  RS485, 4-core shielded   ┌──────────────────────┐  ESP-NOW  ┌──────────────────────┐
  │  SINAT-485  │──────────────────────────▶│ RS485 xcvr → UART    │◀ ─ ─ ─ ─ ─│ ESP32 ← RS485 ← SINAT│
- │  12 V in    │  ~5–8 m, M12 at loader    │ 2.0–2.8" IPS TFT     │  2.4 GHz  │ 18650 / 12 V socket  │
- └─────────────┘  disconnect               │ 2 buttons / encoder  │           │ magnet base, arrow   │
-                                           │ buzzer, 12 V input   │           └──────────────────────┘
-                                           └──────────────────────┘
+ │  12 V in    │  ~5–8 m, M12 at loader    │ 2.0–2.8" IPS TFT     │  2.4 GHz  │ 2×18650, BQ24074     │
+ └─────────────┘  disconnect               │ 2 buttons, buzzer    │           │ magnet base, arrow   │
+                                           │ 12 V in, 5 V→holster │◀── pogo ──│ docked: off + charge │
+                                           └──────────────────────┘           └──────────────────────┘
 ```
 
 Key decisions:
 
 1. **Fork sensor wired, not wireless.** Power is available, RS485 is robust over long cable,
    no battery on the loader, no RF dropout behind steel. One cable along the existing hose route.
-2. **Mount the sensor on the loader quick-attach plate, not on the fork frame.** The plate is
-   rigidly coupled to whatever attachment is on, never leaves the tractor, and gets the same reading
-   for forks or bucket. The plate→tine angle is a fixed offset handled by per-attachment calibration (§6).
-   Mount on the back side, inside a steel guard, away from pallet contact.
+2. **Mount the sensor on the loader's SSQA plate (tractor side), not on the fork frame.** It stays put
+   when the forks come off, so no connector at the attachment, and the SSQA wedge/latch makes the
+   plate→tine angle repeatable. That angle is one fixed offset, zeroed once (§6). Mounting/bracket
+   is yours; the only requirements are rigid, X axis along the tractor, and guarded from pallets.
 3. **ESP32-S3 running MicroPython** for both dash and reference units. Instant boot, no SD card to
    corrupt at key-off (a Raspberry Pi is the wrong tool here), native ESP-NOW for the wireless link,
    and it stays in Python.
@@ -86,11 +91,16 @@ Key decisions:
 | Steel guard for fork sensor (bent 3 mm plate) + M5 stainless bolts | 1 | | 10 |
 | Momentary buttons IP67 ×2 (or rotary encoder w/ push), piezo buzzer | 1 set | | 10 |
 | Dash enclosure (printed ASA/PETG) + RAM ball mount | 1 | | 20 |
-| Reference: 18650 ×2 + holder, TP4056/IP5306 charger-boost or USB-C PD board, power switch | 1 | 5 V for ESP32; SINAT runs on 5 V | 20 |
-| Reference: boost 5→12 V (only if your SINAT needs 9 V min) | 0–1 | check Phase 0 | 5 |
-| Reference: enclosure, 4× pot magnets (≥10 kg pull each), machined/flat base plate | 1 | | 25 |
+| Reference: 2× 18650 (1S2P) + holder | 1 | ~6 Ah | 15 |
+| Reference: Li-ion charger with power-path + thermistor input (TI BQ24074 breakout, e.g. Adafruit #4755) | 1 | blocks charging <0 °C / >45 °C in a cab | 15 |
+| Reference: soft-latching power switch with OFF input (Pololu Mini Pushbutton Power Switch LV, #2808) | 1 | holster + firmware hard-off, see §8.1 | 10 |
+| Reference: 3.3→5 V or 3.7→5 V boost for SINAT (or 5→12 V if your SINAT needs 9 V min) | 1 | check Phase 0 | 5 |
+| Reference: IP67 momentary button, bi-colour LED | 1 | | 8 |
+| Reference: 2-pin magnetic pogo connector pair (panel-mount, IP67-ish) | 1 | holster charge contact | 10 |
+| Reference: enclosure, 4× pot magnets (≥10 kg pull each), flat base plate | 1 | | 25 |
+| Holster: steel/aluminium cradle, M8 cable to dash 5 V, 500 mA polyfuse | 1 | | 15 |
 | USB-RS485 dongle for PC bench work | 1 | | 10 |
-| **Total** | | | **~240** |
+| **Total** | | | **~300** |
 
 ---
 
@@ -100,7 +110,7 @@ Key decisions:
 The SINAT outputs fused roll/pitch directly. Fork pitch shown to operator:
 
 ```
-θ_fork = θ_sensor − θ_offset[attachment]
+θ_fork = θ_sensor − θ_offset
 ```
 
 Sign convention to fix once: **positive = tips up** (rolled back). Display with an arrow, not just a sign.
@@ -156,10 +166,11 @@ irrelevant — that is the point of it.
    put both SINATs on the same surface-plate/flat steel, record difference in pitch and roll,
    rotate both 180° and repeat (separates surface tilt from sensor bias). Store bias in the
    reference unit's config.
-2. **Mount offset per attachment**: forks resting flat on a floor whose tilt is measured by the
-   reference unit (or a digital level); `θ_offset[forks] = θ_sensor − θ_floor`. Same for bucket
-   (cutting edge level / bottom flat). Store 3–4 named profiles in flash; select with a button.
-3. **Quick re-zero** (long-press): "forks are level now" for when an attachment is re-hung.
+2. **Fork zero offset**: lay the reference unit on a tine, lower forks flat onto the floor (light
+   down-pressure to take out linkage slop), `θ_offset = θ_sensor − θ_ref`. This references the
+   tine directly, so the floor need not be level. Roll offset the same way.
+3. **Quick re-zero** (long-press, with confirm): same as 2 but trusts "forks are level now";
+   for when the forks are re-hung and seat slightly differently.
 4. All config in a JSON file on the ESP32 flash; written only on explicit save (flash wear, power cut).
 
 ---
@@ -176,9 +187,9 @@ firmware/
   dash/
     main.py            # asyncio: sensor task 20 Hz, radio rx task, UI task 10 Hz, button task
     ui.py              # screens: ABS, DIFF, CAL, SETTINGS; large font render
-    config.py          # profiles, offsets, ψ, thresholds, load/save JSON
+    config.py          # fork offset, cross-zero bias, ψ, thresholds, load/save JSON
   ref/
-    main.py            # read sensor 20 Hz → ESP-NOW broadcast; battery sense; deep sleep on idle
+    main.py            # read sensor 20 Hz → ESP-NOW; battery sense; idle timer → assert OFF pin (§8.1)
 tools/ (CPython, run on PC)
   sinat_bench.py       # pyserial/minimalmodbus: read, configure, log CSV
   analyze.py           # noise PSD, Allan deviation, step response from logs (numpy/matplotlib)
@@ -190,10 +201,15 @@ ESP-NOW packet (ref → dash, 20 Hz, broadcast to paired MAC):
 Dash marks reference **stale** after 500 ms without packets and blanks the Δ readout.
 
 UI:
-- **ABS screen**: big pitch number with ▲/▼ arrow, horizontal bar ±15°, small roll, profile name.
+- **ABS screen**: big pitch number with ▲/▼ arrow, horizontal bar ±15°, small roll.
 - **DIFF screen**: big Δpitch, Δroll, link RSSI/age, ref battery, ψ indicator.
 - Unsteady → number goes grey. Within target band → green + optional short beep.
-- Buttons: short A = cycle screen, short B = cycle profile, long B = quick-zero, long A+B = settings.
+- Buttons: short A = cycle ABS/DIFF, short B = cycle ψ (DIFF screen), long B = quick-zero,
+  long A+B = settings/calibration.
+- Dash shows "REF DOCKED" / "REF OFF" / ref battery % so you know its state without looking at it.
+
+Reference-unit packet gets a `flags` bit for "shutting down (idle/low batt)" so the dash can
+say why the link dropped.
 
 ---
 
@@ -206,15 +222,47 @@ UI:
   120 Ω termination at both ends (often on the modules, check). Keep sensor and dash at same
   baud; 115200 is plenty for 20 Hz polling.
 - **Cable route:** along loader hose bundle with spiral wrap, P-clips at every hose clamp,
-  service loops at every pivot (boom pivot and bucket pivot) sized for full range of motion.
+  service loops at every pivot (boom pivot and SSQA/curl pivot) sized for full range of motion.
   M12 disconnect at the loader-to-tractor parking point so the loader can be dropped.
-- **Sensor mount:** bolt to a plate welded/clamped on the quick-attach frame; orient sensor X
-  axis along tractor longitudinal axis. Steel U-guard over it. Thread-locker on bolts.
+- **Sensor mount:** your bracket on the SSQA plate; X axis along tractor longitudinal axis
+  (a few degrees of yaw misalignment only couples ~sin(err) of roll into pitch — negligible).
+  Guard it; thread-locker on bolts.
 - **Dash unit:** RAM ball on ROPS post or fender; sun hood; IP65 print (ASA, gasketed lid,
   cable gland).
 - **Reference unit:** flat base (aluminium plate with three hard-anodised feet or full flat face),
-  magnets recessed so the feet/face carry the contact, large printed arrow, power switch,
-  USB-C charging, battery % on a small LED or sent to dash.
+  magnets recessed so the feet/face carry the contact, large printed arrow, one push button,
+  bi-colour status LED, charge contacts on a **side** face (not the base, so a truck bed can't
+  touch them).
+
+### 8.1 Reference unit power and holster interlock
+
+```
+ 2×18650 ─┬─ BQ24074 (charger + power path, NTC) ── SYS ──▶ Pololu pushbutton switch ──▶ boost 5 V ─▶ ESP32 + SINAT
+          │        ▲ IN                                     ▲ A (button)   ▲ OFF
+          │        │                                        │              ├── VDOCK via divider  (holster: forced off)
+ holster  │        │                                    push button        └── ESP32 GPIO        (idle / low-batt off)
+ pogo ────┴── VDOCK (5 V from dash buck, polyfuse)
+```
+
+- **Holster = forced off + charging.** Docked, the pogo pins deliver 5 V (`VDOCK`). It feeds the
+  charger and also drives the power switch's OFF input. While docked the switch is held off in
+  hardware: button presses do nothing, ESP32 and SINAT draw zero, battery charges whenever the
+  ignition is on. No firmware involved, so a crash can't defeat it.
+- **Leaving the holster:** stays off until you press the button (prevents it switching on in a
+  toolbox if the contacts brush something). Optional variant: auto-on at undock by sensing the
+  falling edge of `VDOCK` with an RC pulse into the switch's ON input — decide after using it.
+- **Forgot it on the truck bed:** firmware asserts OFF after 30 min with no dash packets *or* no
+  change in tilt > 0.5°, and at 3.3 V/cell. Same OFF pin = true off (~0.01 µA switch leakage),
+  not deep sleep.
+- **Holster mechanics:** cradle near the dash; the unit's own base magnets hold it to a steel
+  backplate, pogo pins on the side align via the magnetic connector. Use a **3-pin** connector:
+  VDOCK, GND, SENSE. SENSE is tied to GND inside the reference unit; the dash pulls it up and
+  reads it on a GPIO, so the dash knows "REF DOCKED" (vs. "REF OFF/out of range") without any radio.
+- **Runtime:** ESP32 with ESP-NOW TX at 20 Hz (~80–120 mA avg) + SINAT (~25 mA at 12 V-equivalent)
+  ≈ 150 mA from 6 Ah → ~35 h on. Easily a season of occasional use between charges even
+  without the holster.
+- Charging thermistor on the cells: a cab in sun exceeds 45 °C; BQ24074's TS input suspends
+  charge outside 0–45 °C.
 
 ---
 
@@ -224,10 +272,11 @@ UI:
 |---|---|---|
 | **0. Bench characterisation** (PC + USB-RS485) | Identify variant/wiring; verify Modbus map & scaling; set baud, rate, bandwidth; log static noise, tilt-table accuracy vs. digital level, step response; vibration test (handheld on running engine or orbital sander). Write `sinat_bench.py`, `analyze.py`. | Confirmed register map; chosen filter setting; static noise <0.05° RMS; measured bias between the two units |
 | **1. Dash MVP (wired, absolute only)** | ESP32 + RS485 + display on breadboard; `modbus_rtu`, `sinat`, ABS screen; bench-powered from 12 V supply | Shows pitch/roll at ≥10 Hz, matches PC tool |
-| **2. Tractor install, absolute mode** | Mount sensor + guard, run cable, power from tractor, temporary display mount; calibration flow + profiles | ±0.3° vs. digital level on tines across ±20°; readable in sun; survives a day of work |
-| **3. Reference unit + differential** | Second ESP32 + SINAT + battery; ESP-NOW link; `tiltmath` relative tilt w/ ψ; DIFF screen; cross-zero procedure | Δ within ±0.5° vs. digital level on a tilted plank/truck bed; link ≥50 m; stale handling works |
+| **2. Tractor install, absolute mode** | Mount sensor + guard, run cable, power from tractor, temporary display mount; fork zero calibration flow | ±0.3° vs. digital level on tines across ±20°; readable in sun; survives a day of work |
+| **3. Reference unit + differential** | Second ESP32 + SINAT + battery + power-switch/charger (§8.1); ESP-NOW link; `tiltmath` relative tilt w/ ψ; DIFF screen; cross-zero procedure | Δ within ±0.5° vs. digital level on a tilted plank/truck bed; link ≥50 m; stale handling works |
+| **3b. Holster** | Cradle + pogo contacts + 5 V feed from dash; verify forced-off and idle-off | Docked: button dead, unit draws 0 from battery (measure), charges with ignition on; idle-off fires at timeout |
 | **4. Hardening** | Proper enclosures, M12 connectors, power protection board (perfboard or small PCB), sun hood, ref magnet base | 1 month in service, no faults; wash-down OK |
-| **5. Nice-to-haves** | Target-angle mode with audible tone; data log; OTA updates; bucket "return-to-dig" angle preset; second fork sensor for differential tilt between carriage halves (unlikely needed) | — |
+| **5. Nice-to-haves** | Target-angle mode with audible tone; data log; OTA updates | — |
 
 Rough effort: Phase 0 one evening, 1 a weekend, 2 a weekend, 3 a weekend, 4 one–two weekends.
 
@@ -246,8 +295,9 @@ Rough effort: Phase 0 one evening, 1 a weekend, 2 a weekend, 3 a weekend, 4 one�
 
 ## 11. Open questions for you
 
-1. Which SINAT variant is printed on the label — RS485, RS232, or TTL? (Drives transceiver choice.)
-2. Tractor/loader model and quick-attach type (SSQA / Euro / JD / proprietary)? Determines bracket.
-3. Is 12 V switched power easily available near the dash (accessory socket vs. hard-wire)?
-4. Reference unit power: rechargeable battery, or plug into truck 12 V socket?
-5. Want bucket mode (return-to-level) included from Phase 2, or forks only?
+1. Confirm SINAT label reads RS485 (vs. RS232/TTL) and its minimum supply voltage
+   (5 V vs. 9 V decides the reference unit's boost converter).
+2. Undock behaviour: stay off until button (default) or auto-on when pulled from the holster?
+
+Resolved: SSQA loader, user-built sensor bracket; forks only; 12 V hard-wired at dash;
+reference unit on battery with holster forced-off + charging.
