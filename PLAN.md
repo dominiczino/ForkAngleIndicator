@@ -12,20 +12,22 @@ Hardware on hand: 2× WitMotion SINAT dual-axis inclinometer (IP68, accel + gyro
 
 | # | Requirement | Target |
 |---|---|---|
-| R1 | Fork pitch (tip up/down) vs. gravity, shown in cab | ±0.3° static, 0.1° resolution |
+| R1 | Fork pitch (tip up/down) vs. gravity, shown at operator station | ±0.3° static, 0.1° resolution |
 | R2 | Fork roll (side tilt) vs. gravity | ±0.3°, secondary display |
 | R3 | Differential mode: fork plane vs. remote reference plane (truck bed, trailer, rack) | ±0.5° |
 | R4 | Update/latency | ≥10 Hz display, <200 ms latency |
-| R5 | Readable in direct sun, operable with gloves | — |
+| R5 | Readable in direct sun (open station, no cab), operable with gloves | — |
 | R6 | Survives tractor electrical (12 V nominal, 14.4 V charging, cranking dip, load dump) | — |
-| R7 | Survives vibration, wash-down, impacts on the loader | sensor IP68, cable/connector IP67 |
+| R7 | **No cab: every unit fully sealed** — rain, wash-down, dust, UV, vibration, loader impacts | IP67 minimum for dash, reference unit and connectors; sensor IP68 |
 | R8 | Wireless reference range | ≥50 m line of sight |
 | R9 | Forks only (no bucket mode) | single stored fork zero offset |
 | R10 | Boot to reading | <3 s from key-on |
-| R11 | Reference unit battery-powered; **forced hard-off while in its tractor holster** (and charges there) | 0 µA drain from logic when docked |
+| R11 | Reference unit battery-powered; **magnetically forced hard-off while in its tractor holster** | logic off when docked; total drain ≲2 µA |
+| R13 | **No exposed electrical contacts** on the reference unit | sealed charging (Qi inductive) |
 | R12 | Reference unit auto-off if left on out of the holster | configurable, default 30 min idle |
 
-Decided: SSQA (skid-steer quick-attach) loader, forks only, 12 V hard-wired, reference on battery.
+Decided: SSQA (skid-steer quick-attach) loader, forks only, 12 V hard-wired, open station (no cab),
+reference on battery with magnetic holster shutdown and no exposed contacts.
 Pending: confirm SINAT label reads RS485.
 
 ---
@@ -48,14 +50,16 @@ From retailer listings (manufacturer page unreachable from where this plan was w
 ## 3. System architecture
 
 ```
- FORK SENSOR (SINAT #1)                     DASH UNIT (cab)                    REFERENCE UNIT (portable)
+ FORK SENSOR (SINAT #1)                     DASH UNIT (IP67)                   REFERENCE UNIT (IP67, portable)
  on loader SSQA plate                       ESP32-S3 + display                 SINAT #2 + ESP32 + battery
  ┌─────────────┐  RS485, 4-core shielded   ┌──────────────────────┐  ESP-NOW  ┌──────────────────────┐
  │  SINAT-485  │──────────────────────────▶│ RS485 xcvr → UART    │◀ ─ ─ ─ ─ ─│ ESP32 ← RS485 ← SINAT│
- │  12 V in    │  ~5–8 m, M12 at loader    │ 2.0–2.8" IPS TFT     │  2.4 GHz  │ 2×18650, BQ24074     │
- └─────────────┘  disconnect               │ 2 buttons, buzzer    │           │ magnet base, arrow   │
-                                           │ 12 V in, 5 V→holster │◀── pogo ──│ docked: off + charge │
+ │  12 V in    │  ~5–8 m, M12 at loader    │ 2.7" memory LCD      │  2.4 GHz  │ 2×18650, Qi charging │
+ └─────────────┘  disconnect               │ + 3 status LEDs      │           │ magnet base, arrow   │
+                                           │ 2 sealed buttons     │           │ hall sensor: holster │
+                                           │ 12 V in (M12)        │           │ magnet → hard off    │
                                            └──────────────────────┘           └──────────────────────┘
+                                                                     HOLSTER: passive cradle + N52 magnet, no wiring
 ```
 
 Key decisions:
@@ -71,8 +75,13 @@ Key decisions:
    and it stays in Python.
 4. **ESP-NOW** for the reference link: connectionless, no router, ~1–5 ms latency, 100 m+ LOS.
    Optional long-range mode (`WIFI_PROTOCOL_LR`) if range is short.
-5. Display: high-brightness IPS TFT (ST7789/ILI9341, ≥600 nit if you can find it) in a sun hood.
-   Fallback if sunlight readability is poor: 4-digit 7-seg LED + WS2812 LED bar.
+5. **Display for an open station:** reflective Sharp Memory LCD 2.7" (LS027B7DH01, 400×240, SPI).
+   Contrast *improves* in direct sun, no backlight washout, wide temperature range. Paired with three
+   bright LEDs (▼ tips down / ● level / ▲ tips up) readable at night and in peripheral vision while
+   watching the forks. Emissive TFTs lose badly in full sun without a cab roof.
+6. **Sealing approach:** gasketed enclosures, sealed (IP67) panel parts only, M12 connectors,
+   ePTFE pressure-equalisation vent in each enclosure (stops it pumping in moisture through the
+   gasket as it heats/cools), conformal coat on all boards.
 
 ---
 
@@ -80,27 +89,32 @@ Key decisions:
 
 | Item | Qty | Notes | ~USD |
 |---|---|---|---|
-| ESP32-S3 dev board (e.g. DevKitC-1, or LilyGO T-Display-S3 w/ built-in 1.9" screen) | 2 | dash + ref | 25 |
+| ESP32-S3 dev board (e.g. DevKitC-1; external antenna variant for the dash if the enclosure is metal) | 2 | dash + ref | 25 |
 | RS485 transceiver module, 3.3 V, auto-direction (MAX13487 / SP3485 + auto-DE) | 2 | | 8 |
-| 2.0–2.8" IPS TFT, ST7789/ILI9341, SPI | 1 | skip if T-Display-S3 | 12 |
+| Sharp Memory LCD 2.7" LS027B7DH01 + breakout | 1 | reflective, sun-readable | 30 |
+| 3× 5 mm high-brightness LEDs (R/G/R) + IP67 panel lens/holders | 1 set | | 10 |
 | Automotive 12 V→5 V buck, 6–40 V in, ≥1 A (e.g. Pololu D36V6F5 / D24V10F5) | 2 | | 20 |
 | Protection: 1N5822 or ideal-diode reverse protect, SMBJ33A TVS, 1 A blade fuse + holder | 2 sets | load dump | 10 |
 | 4-core shielded PUR cable, oil/UV resistant, 22–24 AWG | 8 m | | 25 |
 | M12 4-pin A-coded connector pair (panel + cable), IP67 | 2 | loader detach point + dash | 25 |
 | Cable glands, spiral wrap / hose sleeve, P-clips, zip ties | — | | 15 |
 | Steel guard for fork sensor (bent 3 mm plate) + M5 stainless bolts | 1 | | 10 |
-| Momentary buttons IP67 ×2 (or rotary encoder w/ push), piezo buzzer | 1 set | | 10 |
-| Dash enclosure (printed ASA/PETG) + RAM ball mount | 1 | | 20 |
+| IP67 momentary buttons ×2 (stainless anti-vandal, O-ring), IP67 piezo buzzer | 1 set | gloves | 20 |
+| Dash enclosure: IP67 polycarbonate box (e.g. Hammond 1555 / Bud PN series) with display window cut + bonded PC/glass window, RAM ball mount, sun visor | 1 | UV-stable; printed ASA only with gasket groove | 40 |
+| ePTFE breather vents (M12 screw-in, e.g. Amphenol LTW VENT-PS1) | 2 | dash + reference | 10 |
+| Conformal coating (acrylic, e.g. MG 419D) | 1 | | 15 |
 | Reference: 2× 18650 (1S2P) + holder | 1 | ~6 Ah | 15 |
-| Reference: Li-ion charger with power-path + thermistor input (TI BQ24074 breakout, e.g. Adafruit #4755) | 1 | blocks charging <0 °C / >45 °C in a cab | 15 |
-| Reference: soft-latching power switch with OFF input (Pololu Mini Pushbutton Power Switch LV, #2808) | 1 | holster + firmware hard-off, see §8.1 | 10 |
+| Reference: Qi receiver module, 5 V / 1 A, with ferrite backing | 1 | sealed charging, see §8.1 | 10 |
+| Reference: Li-ion charger with power-path + thermistor input (TI BQ24074 breakout) | 1 | Qi 5 V → cells | 15 |
+| Reference: soft-latching power switch with ON/OFF inputs (Pololu Mini Pushbutton Power Switch LV) | 1 | hard-off, see §8.1 | 10 |
+| Reference: TI DRV5032 nano-power hall switch (low-sensitivity variant) + single-gate inverter (74LVC1G04) | 1 | holster detect, ~1 µA | 3 |
 | Reference: 3.3→5 V or 3.7→5 V boost for SINAT (or 5→12 V if your SINAT needs 9 V min) | 1 | check Phase 0 | 5 |
-| Reference: IP67 momentary button, bi-colour LED | 1 | | 8 |
-| Reference: 2-pin magnetic pogo connector pair (panel-mount, IP67-ish) | 1 | holster charge contact | 10 |
-| Reference: enclosure, 4× pot magnets (≥10 kg pull each), flat base plate | 1 | | 25 |
-| Holster: steel/aluminium cradle, M8 cable to dash 5 V, 500 mA polyfuse | 1 | | 15 |
+| Reference: IP67 momentary button, bi-colour LED behind sealed light pipe | 1 | | 10 |
+| Reference: IP67 PC enclosure, 4× pot (cup) magnets ≥10 kg pull, flat base plate | 1 | cup magnets keep stray field low | 30 |
+| Holster: cradle (bent steel or printed ASA, drain holes), 1× N52 disc magnet ~12×5 mm, rubber pads | 1 | passive, no wiring | 15 |
+| Qi charging pad (any standard) | 1 | indoors | 15 |
 | USB-RS485 dongle for PC bench work | 1 | | 10 |
-| **Total** | | | **~300** |
+| **Total** | | | **~360** |
 
 ---
 
@@ -203,13 +217,17 @@ Dash marks reference **stale** after 500 ms without packets and blanks the Δ re
 UI:
 - **ABS screen**: big pitch number with ▲/▼ arrow, horizontal bar ±15°, small roll.
 - **DIFF screen**: big Δpitch, Δroll, link RSSI/age, ref battery, ψ indicator.
-- Unsteady → number goes grey. Within target band → green + optional short beep.
+- Memory LCD is monochrome: unsteady → number shown outlined/hatched instead of solid;
+  in target band → solid "LEVEL" banner. The three LEDs carry the colour cue (▼/●/▲, ● lit
+  within ±1°, flashing when unsteady). Optional beep.
 - Buttons: short A = cycle ABS/DIFF, short B = cycle ψ (DIFF screen), long B = quick-zero,
   long A+B = settings/calibration.
-- Dash shows "REF DOCKED" / "REF OFF" / ref battery % so you know its state without looking at it.
+- Dash shows ref state: "REF ON" + battery %, "REF DOCKED", "REF IDLE-OFF", "REF LOW BATT",
+  or "REF LOST" (no farewell packet received).
 
-Reference-unit packet gets a `flags` bit for "shutting down (idle/low batt)" so the dash can
-say why the link dropped.
+Reference-unit packet `flags` carries a reason code when it is about to shut down (docked / idle /
+low battery). It sends that farewell packet 3× during the ~1 s hardware delay (§8.1), so the
+dash knows *why* the link dropped.
 
 ---
 
@@ -227,42 +245,60 @@ say why the link dropped.
 - **Sensor mount:** your bracket on the SSQA plate; X axis along tractor longitudinal axis
   (a few degrees of yaw misalignment only couples ~sin(err) of roll into pitch — negligible).
   Guard it; thread-locker on bolts.
-- **Dash unit:** RAM ball on ROPS post or fender; sun hood; IP65 print (ASA, gasketed lid,
-  cable gland).
-- **Reference unit:** flat base (aluminium plate with three hard-anodised feet or full flat face),
-  magnets recessed so the feet/face carry the contact, large printed arrow, one push button,
-  bi-colour status LED, charge contacts on a **side** face (not the base, so a truck bed can't
-  touch them).
+- **Dash unit (open station):** IP67 polycarbonate box, gasketed lid, window bonded (not just
+  clamped) over the LCD, M12 panel connector for 12 V + RS485 (no cable glands that loosen with
+  vibration), ePTFE vent on the lowest-but-sheltered face, stainless hardware, conformal-coated
+  boards. Mount on a RAM ball off the ROPS or fender with a short visor. Assume it gets
+  pressure-washed.
+- **Wiring:** fork cable and power land on M12 connectors at the dash; all splices adhesive-lined
+  heat-shrink; fused 12 V tapped at the battery/ignition circuit with a sealed fuse holder.
+- **Reference unit:** IP67 PC enclosure, no external contacts or ports. Flat base (aluminium plate
+  with three feet or full flat face), cup magnets recessed so the base carries the contact, large
+  arrow on top, one sealed button, LED behind a sealed light pipe, ePTFE vent. SINAT #2 bolted
+  rigidly to the base plate (its cable is fully internal; coil the excess).
 
-### 8.1 Reference unit power and holster interlock
+### 8.1 Reference unit power, magnetic holster shutdown, sealed charging
 
 ```
- 2×18650 ─┬─ BQ24074 (charger + power path, NTC) ── SYS ──▶ Pololu pushbutton switch ──▶ boost 5 V ─▶ ESP32 + SINAT
-          │        ▲ IN                                     ▲ A (button)   ▲ OFF
-          │        │                                        │              ├── VDOCK via divider  (holster: forced off)
- holster  │        │                                    push button        └── ESP32 GPIO        (idle / low-batt off)
- pogo ────┴── VDOCK (5 V from dash buck, polyfuse)
+                         ┌──────── always powered from cell, ~1 µA ───────┐
+ holster N52 magnet ~~~▶ DRV5032 hall ──▶ inverter ──RC ~1 s──▶ OFF ─┐     │
+                              │                                      ▼     │
+                              └──────────▶ ESP32 GPIO (docked IRQ)   Pololu pushbutton switch ──▶ boost 5 V ─▶ ESP32 + SINAT
+                                                                     ▲ A (sealed button)  ▲ OFF ◀── ESP32 GPIO (idle/low batt)
+ Qi pad ~~~▶ Qi receiver 5 V ──▶ BQ24074 IN ──▶ 2×18650 (1S2P) ──▶ SYS ──┘
 ```
 
-- **Holster = forced off + charging.** Docked, the pogo pins deliver 5 V (`VDOCK`). It feeds the
-  charger and also drives the power switch's OFF input. While docked the switch is held off in
-  hardware: button presses do nothing, ESP32 and SINAT draw zero, battery charges whenever the
-  ignition is on. No firmware involved, so a crash can't defeat it.
-- **Leaving the holster:** stays off until you press the button (prevents it switching on in a
-  toolbox if the contacts brush something). Optional variant: auto-on at undock by sensing the
-  falling edge of `VDOCK` with an RC pulse into the switch's ON input — decide after using it.
-- **Forgot it on the truck bed:** firmware asserts OFF after 30 min with no dash packets *or* no
-  change in tilt > 0.5°, and at 3.3 V/cell. Same OFF pin = true off (~0.01 µA switch leakage),
-  not deep sleep.
-- **Holster mechanics:** cradle near the dash; the unit's own base magnets hold it to a steel
-  backplate, pogo pins on the side align via the magnetic connector. Use a **3-pin** connector:
-  VDOCK, GND, SENSE. SENSE is tied to GND inside the reference unit; the dash pulls it up and
-  reads it on a GPIO, so the dash knows "REF DOCKED" (vs. "REF OFF/out of range") without any radio.
-- **Runtime:** ESP32 with ESP-NOW TX at 20 Hz (~80–120 mA avg) + SINAT (~25 mA at 12 V-equivalent)
-  ≈ 150 mA from 6 Ah → ~35 h on. Easily a season of occasional use between charges even
-  without the holster.
-- Charging thermistor on the cells: a cab in sun exceeds 45 °C; BQ24074's TS input suspends
-  charge outside 0–45 °C.
+- **Holster = magnet = forced off.** The holster is a passive cradle with one N52 magnet. When the
+  unit seats, the hall switch trips and (through an inverter and ~1 s RC delay) holds the power
+  switch's OFF input. That is hardware-only: firmware state cannot keep the unit on.
+  The delay lets firmware send its "docked" farewell packet first; if firmware is hung, the RC
+  still fires.
+- **Hall switch, not reed.** A reed switch draws zero, but reeds are glass and fail under tractor
+  shock/vibration, and can chatter. DRV5032 is solid-state, ~0.5–1 µA at its slow sample rate;
+  with the inverter and power-switch leakage the docked drain is ≲2 µA → years on 6 Ah, i.e.
+  negligible against self-discharge.
+- **Stray-field problem (main risk):** the reference unit has its own mounting magnets. Mitigations:
+  (a) use **cup/pot magnets** — the steel cup confines the field to the base face; (b) put the hall
+  sensor at the top face, far end from the base magnets; (c) use the *lowest-sensitivity* DRV5032
+  variant so only the close holster magnet (tens of mT at ~5 mm) trips it; (d) key the holster so
+  the unit seats one way only, putting the N52 directly over the hall IC. **Verify in Phase 3b**:
+  measure field at the hall location with the unit stuck to a steel truck bed, on a steel toolbox,
+  and next to the tractor's own steel — it must stay below the release point everywhere.
+- **Leaving the holster:** default stays off until you press the button (it can't wake itself in a
+  toolbox). Option: auto-on at undock by RC-pulsing the switch's ON input from the hall output's
+  release edge — cheap to add later.
+- **Forgot it out of the holster:** firmware asserts OFF after 30 min with no dash packets *or* no
+  tilt change > 0.5°, and at 3.3 V/cell. True power-off, not deep sleep.
+- **Charging, no contacts: Qi inductive.** Qi receiver coil glued inside the top face → BQ24074 →
+  cells. Charge on any Qi pad indoors. Constraints: keep the coil ≥20 mm from the aluminium base
+  plate and the cup magnets (eddy currents / pad foreign-object detection), use a receiver with a
+  ferrite backing sheet, wall thickness at the coil ≤3 mm. Expect ~0.5–0.8 A → full charge of
+  6 Ah overnight. BQ24074 TS thermistor still used (no charging below 0 °C).
+- **Runtime:** ESP32 with ESP-NOW TX at 20 Hz (~80–120 mA avg) + SINAT ≈ 150 mA → ~35–40 h on.
+  With auto-off, charging is a few times a season.
+- Optional upgrade if you later want charging in the holster: a sealed Qi transmitter in the
+  cradle fed from tractor 12 V. Still no exposed contacts; the hall shutdown is unaffected (the
+  charger path is upstream of the power switch).
 
 ---
 
@@ -274,8 +310,8 @@ say why the link dropped.
 | **1. Dash MVP (wired, absolute only)** | ESP32 + RS485 + display on breadboard; `modbus_rtu`, `sinat`, ABS screen; bench-powered from 12 V supply | Shows pitch/roll at ≥10 Hz, matches PC tool |
 | **2. Tractor install, absolute mode** | Mount sensor + guard, run cable, power from tractor, temporary display mount; fork zero calibration flow | ±0.3° vs. digital level on tines across ±20°; readable in sun; survives a day of work |
 | **3. Reference unit + differential** | Second ESP32 + SINAT + battery + power-switch/charger (§8.1); ESP-NOW link; `tiltmath` relative tilt w/ ψ; DIFF screen; cross-zero procedure | Δ within ±0.5° vs. digital level on a tilted plank/truck bed; link ≥50 m; stale handling works |
-| **3b. Holster** | Cradle + pogo contacts + 5 V feed from dash; verify forced-off and idle-off | Docked: button dead, unit draws 0 from battery (measure), charges with ignition on; idle-off fires at timeout |
-| **4. Hardening** | Proper enclosures, M12 connectors, power protection board (perfboard or small PCB), sun hood, ref magnet base | 1 month in service, no faults; wash-down OK |
+| **3b. Holster + sealed power** | Hall + inverter + RC into power switch; cradle with N52; Qi charging; stray-field survey (§8.1) | Docked: off within ~1 s, button ineffective, battery drain ≤2 µA (measured); no false trip on steel truck bed/toolbox; Qi charges through closed lid; idle-off fires |
+| **4. Hardening / sealing** | IP67 enclosures, bonded windows, M12 connectors, vents, conformal coat, power protection board (perfboard or small PCB), ref magnet base | Hose test (garden hose, all angles, 3 min) and 30 min submersion of ref unit at 0.5 m with no ingress; 1 month in service, no faults; LCD readable at noon |
 | **5. Nice-to-haves** | Target-angle mode with audible tone; data log; OTA updates | — |
 
 Rough effort: Phase 0 one evening, 1 a weekend, 2 a weekend, 3 a weekend, 4 one–two weekends.
@@ -288,6 +324,10 @@ Rough effort: Phase 0 one evening, 1 a weekend, 2 a weekend, 3 a weekend, 4 one�
   rotation-matrix reference over random angles and ψ; packet round-trip.
 - **Bench:** tilt table steps of 1° over ±30°, both axes; temperature soak (truck cab in sun /
   freezer) to check bias drift; dropout test (unplug fork sensor → "SENSOR" error, not stale number).
+- **Ingress:** after each hose/submersion test open and inspect; check the vent area for
+  condensation after a hot-sun → cold-rain cycle (park in sun, hose with cold water).
+- **Holster:** 50 dock/undock cycles; drop-in at an angle; ride a rough field docked — must not
+  wake or rattle loose.
 - **Field:** engine idle vs. 2000 rpm noise; slow drive transients (unsteady flag behaviour);
   approach a known-tilt bed; link range with steel in the path; cold crank recovery.
 
@@ -298,6 +338,8 @@ Rough effort: Phase 0 one evening, 1 a weekend, 2 a weekend, 3 a weekend, 4 one�
 1. Confirm SINAT label reads RS485 (vs. RS232/TTL) and its minimum supply voltage
    (5 V vs. 9 V decides the reference unit's boost converter).
 2. Undock behaviour: stay off until button (default) or auto-on when pulled from the holster?
+3. Charging: Qi pad indoors (default) fine, or do you want a sealed Qi transmitter in the holster?
 
-Resolved: SSQA loader, user-built sensor bracket; forks only; 12 V hard-wired at dash;
-reference unit on battery with holster forced-off + charging.
+Resolved: SSQA loader, user-built sensor bracket; forks only; 12 V hard-wired at dash; open
+station → everything IP67; reference unit on battery, magnetic hall shutdown in a passive holster,
+no exposed contacts.
